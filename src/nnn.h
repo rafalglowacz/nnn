@@ -132,7 +132,7 @@ struct key {
 static struct key bindings[] = {
 	/* Back */
 	{ KEY_LEFT,       SEL_BACK },
-	{ 'h',            SEL_BACK },
+	{ 'j',            SEL_BACK },
 	/* Inside or select */
 	{ KEY_ENTER,      SEL_OPEN },
 	{ '\r',           SEL_OPEN },
@@ -140,10 +140,10 @@ static struct key bindings[] = {
 	{ KEY_RIGHT,      SEL_NAV_IN },
 	{ 'l',            SEL_NAV_IN },
 	/* Next */
-	{ 'j',            SEL_NEXT },
+	{ 'k',            SEL_NEXT },
 	{ KEY_DOWN,       SEL_NEXT },
 	/* Previous */
-	{ 'k',            SEL_PREV },
+	{ 'i',            SEL_PREV },
 	{ KEY_UP,         SEL_PREV },
 	/* Page down */
 	{ KEY_NPAGE,      SEL_PGDN },
@@ -264,7 +264,7 @@ static struct key bindings[] = {
 	{ 'S',            SEL_SELSIZE },
 	/* Run command */
 	{ '!',            SEL_SHELL },
-	{ CONTROL(']'),   SEL_SHELL },
+	{ 's',            SEL_SHELL },
 	/* Launcher */
 	{ '=',            SEL_LAUNCH },
 	/* Show command prompt */
@@ -272,7 +272,7 @@ static struct key bindings[] = {
 	/* Lock screen */
 	{ '0',            SEL_LOCK },
 	/* Manage sessions */
-	{ 's',            SEL_SESSIONS },
+	// { 's',            SEL_SESSIONS },
 	/* Export list */
 	{ '>',            SEL_EXPORT },
 	/* Set time type */
