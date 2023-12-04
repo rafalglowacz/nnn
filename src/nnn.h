@@ -155,136 +155,136 @@ static struct key bindings[] = {
 	{ CONTROL('U'),   SEL_CTRL_U },
 	/* First entry */
 	{ KEY_HOME,       SEL_HOME },
-	{ 'g',            SEL_HOME },
-	{ CONTROL('A'),   SEL_HOME },
+	// { 'g',            SEL_HOME },
+	// { CONTROL('A'),   SEL_HOME },
 	/* Last entry */
 	{ KEY_END,        SEL_END },
-	{ 'G',            SEL_END },
-	{ CONTROL('E'),   SEL_END },
+	// { 'G',            SEL_END },
+	// { CONTROL('E'),   SEL_END },
 	/* Go to first file */
-	{ '\'',           SEL_FIRST },
+	// { '\'',           SEL_FIRST },
 	/* Jump to an entry number/offset */
-	{ 'J',            SEL_JUMP },
-	{ CONTROL('Y'),   SEL_YOUNG },
+	// { 'J',            SEL_JUMP },
+	// { CONTROL('Y'),   SEL_YOUNG },
 	/* HOME */
 	{ '~',            SEL_CDHOME },
 	/* Initial directory */
-	{ '@',            SEL_CDBEGIN },
+	// { '@',            SEL_CDBEGIN },
 	/* Last visited dir */
-	{ '-',            SEL_CDLAST },
+	// { '-',            SEL_CDLAST },
 	/* Go to / */
 	{ '`',            SEL_CDROOT },
 	/* Leader key */
-	{ 'b',            SEL_BMOPEN },
-	{ CONTROL('_'),   SEL_BMOPEN },
+	// { 'b',            SEL_BMOPEN },
+	// { CONTROL('_'),   SEL_BMOPEN },
 	/* Connect to server over SSHFS */
-	{ 'c',            SEL_REMOTE },
+	// { 'c',            SEL_REMOTE },
 	/* Cycle contexts in forward direction */
 	{ '\t',           SEL_CYCLE },
 	/* Cycle contexts in reverse direction */
 	{ KEY_BTAB,       SEL_CYCLER },
 	/* Go to/create context N */
-	{ '1',            SEL_CTX1 },
-	{ '2',            SEL_CTX2 },
-	{ '3',            SEL_CTX3 },
-	{ '4',            SEL_CTX4 },
+	// { '1',            SEL_CTX1 },
+	// { '2',            SEL_CTX2 },
+	// { '3',            SEL_CTX3 },
+	// { '4',            SEL_CTX4 },
 #ifdef CTX8
-	{ '5',            SEL_CTX5 },
-	{ '6',            SEL_CTX6 },
-	{ '7',            SEL_CTX7 },
-	{ '8',            SEL_CTX8 },
+	// { '5',            SEL_CTX5 },
+	// { '6',            SEL_CTX6 },
+	// { '7',            SEL_CTX7 },
+	// { '8',            SEL_CTX8 },
 #endif
 	/* Mark a path to visit later */
-	{ ',',            SEL_MARK },
+	// { ',',            SEL_MARK },
 	/* Create a bookmark */
-	{ 'B',            SEL_BMARK },
+	// { 'B',            SEL_BMARK },
 	/* Filter */
 	{ '/',            SEL_FLTR },
 	/* Toggle filter mode */
-	{ CONTROL('N'),   SEL_MFLTR },
+	// { CONTROL('N'),   SEL_MFLTR },
 	/* Toggle hide .dot files */
-	{ '.',            SEL_HIDDEN },
+	{ CONTROL('.'),   SEL_HIDDEN },
 	/* Detailed listing */
-	{ 'd',            SEL_DETAIL },
+	// { 'd',            SEL_DETAIL },
 	/* File details */
-	{ 'f',            SEL_STATS },
+	// { 'f',            SEL_STATS },
 	{ CONTROL('F'),   SEL_STATS },
 	/* Toggle executable status */
-	{ '*',            SEL_CHMODX },
+	// { '*',            SEL_CHMODX },
 	/* Create archive */
-	{ 'z',            SEL_ARCHIVE },
+	// { 'z',            SEL_ARCHIVE },
 	/* Sort toggles */
-	{ 't',            SEL_SORT },
+	// { 't',            SEL_SORT },
 	{ CONTROL('T'),   SEL_SORT },
 	/* Redraw window */
-	{ CONTROL('L'),   SEL_REDRAW },
+	// { CONTROL('L'),   SEL_REDRAW },
 	/* Select current file path */
-	{ ' ',            SEL_SEL },
-	{ '+',            SEL_SEL },
+	// { ' ',            SEL_SEL },
+	// { '+',            SEL_SEL },
 	/* Toggle select multiple files */
-	{ 'm',            SEL_SELMUL },
+	// { 'm',            SEL_SELMUL },
 	/* Select all files in current dir */
-	{ 'a',            SEL_SELALL },
+	// { 'a',            SEL_SELALL },
 	/* Invert selection in current dir */
-	{ 'A',            SEL_SELINV },
+	// { 'A',            SEL_SELINV },
 	/* List, edit selection */
-	{ 'E',            SEL_SELEDIT },
+	// { 'E',            SEL_SELEDIT },
 	/* Copy from selection buffer */
-	{ 'p',            SEL_CP },
+	// { 'p',            SEL_CP },
 	{ CONTROL('P'),   SEL_CP },
 	/* Move from selection buffer */
-	{ 'v',            SEL_MV },
+	// { 'v',            SEL_MV },
 	{ CONTROL('V'),   SEL_MV },
 	/* Copy/move from selection buffer and rename */
-	{ 'w',            SEL_CPMVAS },
+	// { 'w',            SEL_CPMVAS },
 	{ CONTROL('W'),   SEL_CPMVAS },
 	/* Delete from selection buffer */
-	{ 'x',            SEL_RM },
+	// { 'x',            SEL_RM },
 	{ CONTROL('X'),   SEL_RM },
 	/* Open in a custom application */
-	{ 'o',            SEL_OPENWITH },
+	// { 'o',            SEL_OPENWITH },
 	{ CONTROL('O'),   SEL_OPENWITH },
 	/* Create a new file */
-	{ 'n',            SEL_NEW },
+	// { 'n',            SEL_NEW },
 	/* Show rename prompt */
 	{ CONTROL('R'),   SEL_RENAME },
 	/* Rename contents of current dir */
-	{ 'r',            SEL_RENAMEMUL },
+	// { 'r',            SEL_RENAMEMUL },
 	/* Disconnect a SSHFS mount point */
-	{ 'u',            SEL_UMOUNT },
+	// { 'u',            SEL_UMOUNT },
 	/* Show help */
-	{ '?',            SEL_HELP },
+	// { '?',            SEL_HELP },
 	/* Toggle auto-advance on file open */
-	{ CONTROL('J'),   SEL_AUTONEXT },
+	// { CONTROL('J'),   SEL_AUTONEXT },
 	/* Edit in EDITOR */
-	{ 'e',            SEL_EDIT },
+	{ CONTROL('e'),   SEL_EDIT },
 	/* Run a plugin */
-	{ ';',            SEL_PLUGIN },
+	// { ';',            SEL_PLUGIN },
 	/* Show total size of listed selection */
-	{ 'S',            SEL_SELSIZE },
+	// { 'S',            SEL_SELSIZE },
 	/* Run command */
-	{ '!',            SEL_SHELL },
-	{ 's',            SEL_SHELL },
+	// { '!',            SEL_SHELL },
+	{ CONTROL('j'),      SEL_SHELL },
 	/* Launcher */
-	{ '=',            SEL_LAUNCH },
+	// { '=',            SEL_LAUNCH },
 	/* Show command prompt */
-	{ ']',            SEL_PROMPT },
+	// { ']',            SEL_PROMPT },
 	/* Lock screen */
-	{ '0',            SEL_LOCK },
+	// { '0',            SEL_LOCK },
 	/* Manage sessions */
 	// { 's',            SEL_SESSIONS },
 	/* Export list */
-	{ '>',            SEL_EXPORT },
+	// { '>',            SEL_EXPORT },
 	/* Set time type */
-	{ 'T',            SEL_TIMETYPE },
+	// { 'T',            SEL_TIMETYPE },
 	/* Quit a context */
-	{ 'q',            SEL_QUITCTX },
+	// { 'q',            SEL_QUITCTX },
 	/* Change dir on quit */
-	{ CONTROL('G'),   SEL_QUITCD },
+	// { CONTROL('G'),   SEL_QUITCD },
 	/* Quit */
 	{ CONTROL('Q'),   SEL_QUIT },
 	/* Quit with an error code */
-	{ 'Q',            SEL_QUITERR },
+	// { 'Q',            SEL_QUITERR },
 #ifndef NOMOUSE
 	{ KEY_MOUSE,      SEL_CLICK },
 #endif
