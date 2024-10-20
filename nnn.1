@@ -1,4 +1,4 @@
-.Dd Aug 27, 2023
+.Dd Aug 26, 2024
 .Dt NNN 1
 .Os
 .Sh NAME
@@ -148,7 +148,7 @@ supports the following options:
 .Pp
 .Fl "T key"
         sort order
-        keys: 'a'u / 'd'u / 'e'xtension / 'r'everse / 's'ize / 't'ime / 'v'ersion
+        keys: 'a'pparent disk usage / 'd'isk usage / 'e'xtension / 'r'everse / 's'ize / 't'ime / 'v'ersion
         capitalize to reverse (except 'r')
 .Pp
 .Fl u
@@ -164,6 +164,9 @@ supports the following options:
         show notifications on selection cp, mv, rm completion (requires \fI.ntfy\fR plugin)
         copy path to system clipboard on selection (requires \fI.cbcp\fR plugin)
         show xterm title (if non-picker mode)
+.Pp
+.Fl 0
+        use null separator (instead of newline) to separate file paths in picker mode outout
 .Pp
 .Fl h
         show program help and exit
@@ -353,7 +356,7 @@ Handy bash/zsh shell function to list files by mime-type in current directory:
 
     list ()
     {
-        find . -maxdepth 1 | file -if- | grep "$1" | awk -F: '{printf "%s\0", $1}' | nnn
+        find . -maxdepth 1 | file -if- | grep "$1" | awk -F: '{printf "%s%c", $1, 0}' | nnn
     }
 .Ed
 .Pp

@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2014-2016, Lazaros Koromilas <lostd@2f30.org>
  * Copyright (C) 2014-2016, Dimitris Papastamos <sin@2f30.org>
- * Copyright (C) 2016-2023, Arun Prakash Jana <engineerarun@gmail.com>
+ * Copyright (C) 2016-2024, Arun Prakash Jana <engineerarun@gmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -148,7 +148,7 @@
 #endif
 
 /* Macro definitions */
-#define VERSION      "4.9"
+#define VERSION      "5.0"
 #define GENERAL_INFO "BSD 2-Clause\nhttps://github.com/jarun/nnn"
 
 #ifndef NOSSN
@@ -192,6 +192,8 @@
 #define MSGWAIT         '$'
 #define SELECT          ' '
 #define PROMPT          ">>> "
+#undef NEWLINE
+#define NEWLINE         "\n"
 #define REGEX_MAX       48
 #define ENTRY_INCR      64 /* Number of dir 'entry' structures to allocate per shot */
 #define NAMEBUF_INCR    0x800 /* 64 dir entries at once, avg. 32 chars per file name = 64*32B = 2KB */
@@ -276,6 +278,10 @@
 /* result_type: VCMP: return diff; VLEN: compare using len_diff/diff */
 #define VCMP 2
 #define VLEN 3
+
+/* Command history */
+#define MAX_HISTORY 0x10
+#define INVALID_POS 0xFF
 
 /* Volume info */
 #define VFS_AVAIL 0
@@ -390,7 +396,8 @@ typedef struct {
 	uint_t uidgid     : 1;  /* Show owner and group info */
 	uint_t usebsdtar  : 1;  /* Use bsdtar as default archive utility */
 	uint_t xprompt    : 1;  /* Use native prompt instead of readline prompt */
-	uint_t reserved   : 4;  /* Adjust when adding/removing a field */
+	uint_t showlines  : 1;  /* Show line numbers */
+	uint_t reserved   : 3;  /* Adjust when adding/removing a field */
 } runstate;
 
 /* Contexts or workspaces */
@@ -436,6 +443,8 @@ static ushort_t xlines, xcols;
 static ushort_t idle;
 static uchar_t maxbm, maxplug, maxorder;
 static uchar_t cfgsort[CTX_MAX + 1];
+static uchar_t selcmdpos = INVALID_POS, lastcmdpos = INVALID_POS;
+static char *cmd_hist[MAX_HISTORY] = {0};
 static char *bmstr;
 static char *pluginstr;
 static char *orderstr;
@@ -459,7 +468,6 @@ static char hostname[_POSIX_HOST_NAME_MAX + 1];
 #ifndef NOFIFO
 static char *fifopath;
 #endif
-static char *lastcmd;
 static ullong_t *ihashbmp;
 static struct entry *pdents;
 static blkcnt_t dir_blocks;
@@ -475,6 +483,9 @@ static int middle_click_key;
 static pcre *archive_pcre;
 #else
 static regex_t archive_re;
+#endif
+#ifndef NOSSN
+static char curssn[NAME_MAX + 1];
 #endif
 
 /* pthread related */
@@ -588,7 +599,7 @@ static char * const utils[] = {
 	".nmv",
 	"trash-put",
 	"gio trash",
-	"rm -rf",
+	"rm -rf --",
 	"archivemount",
 };
 
@@ -602,7 +613,7 @@ static char * const utils[] = {
 #define MSG_SSN_NAME     6
 #define MSG_CP_MV_AS     7
 #define MSG_CUR_SEL_OPTS 8
-#define MSG_FORCE_RM     9
+#define MSG_FILE_LIMIT   9
 #define MSG_SIZE_LIMIT   10
 #define MSG_NEW_OPTS     11
 #define MSG_CLI_MODE     12
@@ -637,7 +648,6 @@ static char * const utils[] = {
 #define MSG_NOCHANGE     41
 #define MSG_DIR_CHANGED  42
 #define MSG_BM_NAME      43
-#define MSG_FILE_LIMIT   44
 
 static const char * const messages[] = {
 	"",
@@ -649,7 +659,7 @@ static const char * const messages[] = {
 	"session name: ",
 	"'c'p/'m'v as?",
 	"'c'urrent/'s'el?",
-	"%s %s? [Esc cancels]",
+	"file limit exceeded",
 	"size limit exceeded",
 	"['f'ile]/'d'ir/'s'ym/'h'ard?",
 	"['g'ui]/'c'li?",
@@ -684,7 +694,6 @@ static const char * const messages[] = {
 	"unchanged",
 	"dir changed, range sel off",
 	"name: ",
-	"file limit exceeded",
 };
 
 /* Supported configuration environment variables */
@@ -740,10 +749,10 @@ static const char * const envs[] = {
 #define T_CHANGE 1
 #define T_MOD    2
 
-#define PROGRESS_CP   "cpg -giRp"
-#define PROGRESS_MV   "mvg -gi"
-static char cp[sizeof PROGRESS_CP] = "cp -iRp";
-static char mv[sizeof PROGRESS_MV] = "mv -i";
+#define PROGRESS_CP   "cpg -giRp --"
+#define PROGRESS_MV   "mvg -gi --"
+static char cp[sizeof PROGRESS_CP] = "cp -iRp --";
+static char mv[sizeof PROGRESS_MV] = "mv -i --";
 
 /* Archive commands */
 static char * const archive_cmd[] = {"atool -a", "bsdtar -acvf", "zip -r", "tar -acvf"};
@@ -924,7 +933,7 @@ static bool test_set_bit(uint_t nr)
 	nr &= HASH_BITS;
 
 	pthread_mutex_lock(&hardlink_mutex);
-	ullong_t *m = ((ullong_t *)ihashbmp) + (nr >> 6);
+	ullong_t *m = ihashbmp + (nr >> 6);
 
 	if (*m & (1 << (nr & 63))) {
 		pthread_mutex_unlock(&hardlink_mutex);
@@ -1234,7 +1243,7 @@ static char *abspath(const char *filepath, char *cwd, char *buf)
 		cwd = home;
 		path += 2; /* advance 2 bytes past the "~/" */
 	} else if ((path[0] != '/') && !cwd) {
-		cwd = getcwd(NULL, 0);
+		cwd = getcwd(NULL, 0); // NOLINT
 		if (!cwd)
 			return NULL;
 		allocated = TRUE;
@@ -1311,14 +1320,14 @@ static char *abspath(const char *filepath, char *cwd, char *buf)
 }
 
 /* finds abspath of link pointed by filepath, taking cwd into account */
-static char *bmtarget(const char *filepath, char *cwd, char *buf) 
+static char *bmtarget(const char *filepath, char *cwd, char *buf)
 {
 	char target[PATH_MAX + 1];
 	ssize_t n = readlink(filepath, target, PATH_MAX);
 	if (n != -1) {
 		target[n] = '\0';
 		return abspath(target, cwd, buf);
-	} 
+	}
 	return NULL;
 }
 
@@ -1422,7 +1431,13 @@ static int create_tmp_file(void)
 
 static void msg(const char *message)
 {
-	dprintf(STDERR_FILENO, "%s\n", message);
+	fprintf(stderr, "%s\n", message);
+}
+
+static void clearinfoln(void)
+{
+	move(xlines - 2, 0);
+	clrtoeol();
 }
 
 #ifdef KEY_RESIZE
@@ -1435,9 +1450,7 @@ static void handle_key_resize(void)
 /* Clear the old prompt */
 static void clearoldprompt(void)
 {
-	// clear info line
-	move(xlines - 2, 0);
-	clrtoeol();
+	clearinfoln();
 
 	tolastln();
 	clrtoeol();
@@ -1550,21 +1563,27 @@ static void xdelay(useconds_t delay)
 	usleep(delay);
 }
 
-static char confirm_force(bool selection)
+static char confirm_force(bool selection, bool use_trash)
 {
-	char str[64];
+	char str[300];
 
-	snprintf(str, 64, messages[MSG_FORCE_RM],
-		 g_state.trash ? utils[UTIL_GIO_TRASH] + 4 : utils[UTIL_RM_RF],
-		 (selection ? "selected" : "hovered"));
+	/* Note: ideally we should use utils[UTIL_RM_RF] instead of the "rm -rf" string */
+	int r = snprintf(str, 20, "%s", use_trash ? utils[UTIL_GIO_TRASH] + 4 : "rm -rf");
 
-	int r = get_input(str);
+	if (selection)
+		snprintf(str + r, 280, " %d files?", nselected);
+	else
+		snprintf(str + r, 280, " '%s'?", pdents[cur].name);
+
+	r = get_input(str);
 
 	if (r == ESC)
 		return '\0'; /* cancel */
 	if (r == 'y' || r == 'Y')
 		return 'f'; /* forceful for rm */
-	return (g_state.trash ? '\0' : 'i'); /* interactive for rm */
+	if (r == 'n' || r == 'N')
+		return '\0'; /* cancel */
+	return (use_trash ? '\0' : 'i'); /* interactive for rm */
 }
 
 /* Writes buflen char(s) from buf to a file */
@@ -1606,7 +1625,7 @@ static void selbufrealloc(const size_t alloclen)
 }
 
 /* Write selected file paths to fd, linefeed separated */
-static size_t seltofile(int fd, uint_t *pcount)
+static size_t seltofile(int fd, uint_t *pcount, const char *separator)
 {
 	uint_t lastpos, count = 0;
 	char *pbuf = pselbuf;
@@ -1642,7 +1661,7 @@ static size_t seltofile(int fd, uint_t *pcount)
 
 		pos += len;
 		if (pos <= lastpos) {
-			if (write(fd, "\n", 1) != 1)
+			if (write(fd, separator, 1) != 1)
 				return pos;
 			pbuf += len + 1;
 		}
@@ -1967,7 +1986,7 @@ static void endselection(bool endselmode)
 		return;
 	}
 
-	seltofile(fd, NULL);
+	seltofile(fd, NULL, NEWLINE);
 	if (close(fd)) {
 		DPRINTF_S(strerror(errno));
 		printwarn(NULL);
@@ -2031,7 +2050,7 @@ static int editselection(void)
 		return -1;
 	}
 
-	seltofile(fd, NULL);
+	seltofile(fd, NULL, NEWLINE);
 	if (close(fd)) {
 		DPRINTF_S(strerror(errno));
 		return -1;
@@ -2282,8 +2301,10 @@ static bool initcurses(void *oldmask)
 						msg(env_cfg[NNN_COLORS]);
 						return FALSE;
 					}
-				} else
+				} else {
 					*pcode = (*colors < '0' || *colors > '7') ? 4 : *colors - '0';
+					fcolors[i + 1] = *pcode;
+				}
 				++colors;
 			} else
 				*pcode = 4;
@@ -2465,7 +2486,7 @@ static int spawn(char *file, char *arg1, char *arg2, char *arg3, ushort_t flag)
 
 			if (flag & F_NOSTDIN)
 				dup2(fd, STDIN_FILENO);
-			dup2(fd, STDOUT_FILENO);
+			dup2(fd, STDOUT_FILENO); // NOLINT
 			dup2(fd, STDERR_FILENO);
 			close(fd);
 		} else if (flag & F_TTY) {
@@ -2547,14 +2568,14 @@ static void opstr(char *buf, char *op)
 	snprintf(buf, CMD_LEN_MAX, "xargs -0 sh -c '%s \"$0\" \"$@\" . < /dev/tty' < %s", op, selpath);
 }
 
-static bool rmmulstr(char *buf)
+static bool rmmulstr(char *buf, bool use_trash)
 {
-	char r = confirm_force(TRUE);
+	char r = confirm_force(TRUE, use_trash);
 	if (!r)
 		return FALSE;
 
-	if (!g_state.trash)
-		snprintf(buf, CMD_LEN_MAX, "xargs -0 sh -c 'rm -%cr \"$0\" \"$@\" < /dev/tty' < %s",
+	if (!use_trash)
+		snprintf(buf, CMD_LEN_MAX, "xargs -0 sh -c 'rm -%cvr -- \"$0\" \"$@\" < /dev/tty' < %s",
 			 r, selpath);
 	else
 		snprintf(buf, CMD_LEN_MAX, "xargs -0 %s < %s",
@@ -2564,17 +2585,17 @@ static bool rmmulstr(char *buf)
 }
 
 /* Returns TRUE if file is removed, else FALSE */
-static bool xrm(char * const fpath)
+static bool xrm(char * const fpath, bool use_trash)
 {
-	char r = confirm_force(FALSE);
+	char r = confirm_force(FALSE, use_trash);
 	if (!r)
 		return FALSE;
 
-	if (!g_state.trash) {
-		char rm_opts[] = "-ir";
+	if (!use_trash) {
+		char rm_opts[5] = "-vr\0";
 
-		rm_opts[1] = r;
-		spawn("rm", rm_opts, fpath, NULL, F_NORMAL | F_CHKRTN);
+		rm_opts[3] = r;
+		spawn("rm", rm_opts, "--", fpath, F_NORMAL | F_CHKRTN);
 	} else
 		spawn(utils[(g_state.trash == 1) ? UTIL_TRASH_CLI : UTIL_GIO_TRASH],
 		      fpath, NULL, NULL, F_NORMAL | F_MULTI);
@@ -2637,7 +2658,7 @@ static bool cpmv_rename(int choice, const char *path)
 		if (!count)
 			goto finish;
 	} else
-		seltofile(fd, &count);
+		seltofile(fd, &count, NEWLINE);
 
 	close(fd);
 
@@ -2701,8 +2722,8 @@ static bool cpmvrm_selection(enum action sel, char *path)
 			return FALSE;
 		}
 		break;
-	default: /* SEL_RM */
-		if (!rmmulstr(g_buf)) {
+	default: /* SEL_TRASH, SEL_RM_ONLY */
+		if (!rmmulstr(g_buf, g_state.trash && sel == SEL_TRASH)) {
 			printmsg(messages[MSG_CANCEL]);
 			return FALSE;
 		}
@@ -2727,7 +2748,7 @@ static bool batch_rename(void)
 	bool dir = FALSE, ret = FALSE;
 	char foriginal[TMP_LEN_MAX] = {0};
 	static const char batchrenamecmd[] = "paste -d'\n' %s %s | "SED" 'N; /^\\(.*\\)\\n\\1$/!p;d' | "
-					     "tr '\n' '\\0' | xargs -0 -n2 sh -c 'mv -i \"$0\" \"$@\" <"
+					     "tr '\n' '\\0' | xargs -0 -n2 sh -c 'mv -i -- \"$0\" \"$@\" <"
 					     " /dev/tty'";
 	char buf[sizeof(batchrenamecmd) + (PATH_MAX << 1)];
 	int i = get_cur_or_sel();
@@ -2757,8 +2778,8 @@ static bool batch_rename(void)
 		for (i = 0; i < ndents; ++i)
 			appendfpath(pdents[i].name, NAME_MAX);
 
-	seltofile(fd1, &count);
-	seltofile(fd2, NULL);
+	seltofile(fd1, &count, NEWLINE);
+	seltofile(fd2, NULL, NEWLINE);
 	close(fd2);
 
 	if (dir) /* Don't retain dir entries in selection */
@@ -2839,7 +2860,11 @@ static void write_lastdir(const char *curpath, const char *outfile)
 			: cfgpath, O_CREAT | O_WRONLY | O_TRUNC, S_IWUSR | S_IRUSR);
 
 	if (fd != -1 && shell_escape(g_buf, sizeof(g_buf), curpath)) {
-		dprintf(fd, "cd %s", g_buf);
+		if (write(fd, "cd ", 3) == 3) {
+			if (write(fd, g_buf, strlen(g_buf)) != (ssize_t)strlen(g_buf)) {
+				DPRINTF_S("write failed!");
+			}
+		}
 		close(fd);
 	}
 }
@@ -3435,7 +3460,14 @@ static int filterentries(char *path, char *lastname)
 			continue;
 #ifndef NOMOUSE
 		case KEY_MOUSE:
+		{
+			MEVENT event = {0};
+			getmouse(&event);
+			if (event.bstate == 0)
+				continue;
+			ungetmouse(&event);
 			goto end;
+		}
 #endif
 		case ESC:
 			if (handle_alt_key(ch) != ERR) {
@@ -3542,6 +3574,7 @@ static int filterentries(char *path, char *lastname)
 		showfilter(ln);
 	}
 end:
+	clearinfoln();
 
 	/* Save last working filter in-filter */
 	if (ln[1])
@@ -3555,6 +3588,49 @@ end:
 
 	/* Return keys for navigation etc. */
 	return *ch;
+}
+
+static char *getcmdfromhist(bool up)
+{
+	if (lastcmdpos == INVALID_POS) /* No entry in history */
+		return NULL;
+
+	if (selcmdpos == INVALID_POS) /* Initial position at prompt */
+		selcmdpos = up ? lastcmdpos : 0;
+	else if (up)
+		selcmdpos = (selcmdpos == 0) ? lastcmdpos : selcmdpos - 1;
+	else
+		selcmdpos = (selcmdpos == lastcmdpos) ? 0 : selcmdpos + 1;
+
+	return cmd_hist[selcmdpos];
+}
+
+static void addcmdtohist(char *cmd)
+{
+	bool new = FALSE;
+
+	if (lastcmdpos == INVALID_POS)
+		new = TRUE;
+	else if ((selcmdpos == INVALID_POS) || (xstrcmp(cmd_hist[selcmdpos], cmd) != 0)) { /* New or not matching */
+		if (lastcmdpos == (MAX_HISTORY - 1)) {
+			free(cmd_hist[0]);
+
+			for (uchar_t pos = 0; pos < lastcmdpos; ++pos)
+				cmd_hist[pos] = cmd_hist[pos + 1];
+			--lastcmdpos;
+		}
+
+		new = TRUE;
+	} else if (selcmdpos != lastcmdpos) { /* Command matches, make it the latest if not already */
+		cmd = cmd_hist[selcmdpos];
+
+		for (uchar_t pos = selcmdpos; pos < lastcmdpos; ++pos)
+			cmd_hist[pos] = cmd_hist[pos + 1];
+		cmd_hist[lastcmdpos] = cmd;
+	}
+
+	if (new)
+		cmd_hist[++lastcmdpos] = xstrdup(cmd);
 }
 
 /* Show a prompt with input string and return the changes */
@@ -3725,10 +3801,14 @@ static char *xreadline(const char *prefill, const char *prompt)
 				break;
 			case KEY_UP: // fallthrough
 			case KEY_DOWN:
-				if (prompt && lastcmd && (xstrcmp(prompt, PROMPT) == 0)) {
+			{
+				char *cmd = getcmdfromhist(*ch == KEY_UP);
+
+				if (prompt && cmd && (xstrcmp(prompt, PROMPT) == 0)) {
 					printmsg(prompt);
-					len = pos = mbstowcs(buf, lastcmd, READLINE_MAX); // fallthrough
+					len = pos = mbstowcs(buf, cmd, READLINE_MAX); // fallthrough
 				}
+			}
 			default:
 				break;
 			}
@@ -4223,8 +4303,9 @@ static uchar_t get_color_pair_name_ind(const struct entry *ent, char *pind, int 
 	return C_UND;
 }
 
-static void printent(const struct entry *ent, uint_t namecols, bool sel)
+static void printent(int pdents_index, uint_t namecols, bool sel)
 {
+	const struct entry *ent = &pdents[pdents_index];
 	char ind = '\0';
 	int attrs;
 
@@ -4249,6 +4330,11 @@ static void printent(const struct entry *ent, uint_t namecols, bool sel)
 
 		if (attrs)
 			attroff(attrs);
+	}
+
+	if (g_state.showlines) {
+		ptrdiff_t rel_num = pdents_index - cur;
+		printw(rel_num == 0 ? "%4td" : "%+4td", rel_num);
 	}
 
 	attrs = 0;
@@ -4404,7 +4490,8 @@ static bool load_session(const char *sname, char **path, char **lastdir, char **
 	mkpath(cfgpath, toks[TOK_SSN], ssnpath);
 
 	if (!restore) {
-		sname = sname ? sname : xreadline(NULL, messages[MSG_SSN_NAME]);
+		if (!sname || !sname[0])
+			sname = xreadline(NULL, messages[MSG_SSN_NAME]);
 		if (!sname[0])
 			return FALSE;
 
@@ -4455,6 +4542,7 @@ static bool load_session(const char *sname, char **path, char **lastdir, char **
 	*lastdir = g_ctx[cfg.curctx].c_last;
 	*lastname = g_ctx[cfg.curctx].c_name;
 	set_sort_flags('\0'); /* Set correct sort options */
+	xstrsncpy(curssn, sname, NAME_MAX);
 	status = TRUE;
 
 END:
@@ -4717,7 +4805,7 @@ next:
 			return FALSE;
 		}
 	} else {
-		int fd = open(path, O_CREAT | O_TRUNC, S_IWUSR | S_IRUSR); /* Forced create mode for files */
+		int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IWUSR | S_IRUSR); /* Forced create mode for files */
 
 		if (fd == -1 && errno != EEXIST) {
 			DPRINTF_S("open!");
@@ -4752,7 +4840,7 @@ static bool handle_archive(char *fpath /* in-out param */, char op)
 				return FALSE;
 			}
 			/* Copy the new dir path to open it in smart context */
-			outdir = getcwd(NULL, 0);
+			outdir = getcwd(NULL, 0); // NOLINT
 			x_to = TRUE;
 		}
 	}
@@ -5042,12 +5130,12 @@ static void lock_terminal(void)
 	spawn(xgetenv("NNN_LOCKER", utils[UTIL_LOCKER]), NULL, NULL, NULL, F_CLI);
 }
 
-static void printkv(kv *kvarr, int fd, uchar_t max, uchar_t id)
+static void printkv(kv *kvarr, FILE *f, uchar_t max, uchar_t id)
 {
 	char *val = (id == NNN_BMS) ? bmstr : pluginstr;
 
 	for (uchar_t i = 0; i < max && kvarr[i].key; ++i)
-		dprintf(fd, " %c: %s\n", (char)kvarr[i].key, val + kvarr[i].off);
+		fprintf(f, " %c: %s\n", (char)kvarr[i].key, val + kvarr[i].off);
 }
 
 static void printkeys(kv *kvarr, char *buf, uchar_t max)
@@ -5161,8 +5249,8 @@ static void show_help(const char *path)
 	          "ca  Select all%14A  Invert sel\n"
 	       "9p ^P  Copy here%12w ^W  Cp/mv sel as\n"
 	       "9v ^V  Move here%15E  Edit sel list\n"
-	       "9x ^X  Delete%18S  Listed sel size\n"
-		"aEsc  Send to FIFO\n"
+	       "9x ^X  Delete or trash%09S  Listed sel size\n"
+		  "cX  Delete (rm -rf)%07Esc  Send to FIFO\n"
 	"0\n"
 	"1MISC\n"
 	      "8Alt ;  Select plugin%11=  Launch app\n"
@@ -5172,72 +5260,82 @@ static void show_help(const char *path)
 		  "cT  Set time type%110  Lock\n"
 		 "b^L  Redraw%18?  Help, conf\n"
 	};
-	char help_buf[1<<11]; // if editing helpstr, ensure this has enough space to decode it
 
 	int fd = create_tmp_file();
 	if (fd == -1)
 		return;
+	FILE *f = fdopen(fd, "wb");
+	if (f == NULL) {
+		close(fd);
+		unlink(g_tmpfpath);
+		return;
+	}
 
 	char *prog = xgetenv(env_cfg[NNN_HELP], NULL);
 	if (prog)
 		get_output(prog, NULL, NULL, fd, FALSE);
 
 	bool hex = true;
-	char *w = help_buf;
-	const char *end = helpstr + (sizeof helpstr - 1);
+	const char *end = helpstr + sizeof(helpstr) - 1;
+
 	for (const char *s = helpstr; s < end; ++s) {
 		if (hex) {
-			for (int k = 0, n = xchartohex(*s); k < n; ++k) *w++ = ' ';
+			for (int k = 0, n = xchartohex(*s); k < n; ++k)
+				fputc(' ', f);
 		} else if (*s == '%') {
 			int n = ((s[1] - '0') * 10) + (s[2] - '0');
-			for (int k = 0; k < n; ++k) *w++ = ' ';
+			for (int k = 0; k < n; ++k)
+				fputc(' ', f);
 			s += 2;
 		} else {
-			*w++ = *s;
+			fputc(*s, f);
 		}
-		hex = *s == '\n';
+		hex = (*s == '\n');
 	}
-	ssize_t res = write(fd, help_buf, w - help_buf);
-	(void)res; // silence warning
 
-	dprintf(fd, "\nLOCATIONS\n");
+#ifndef NOSSN
+	if (curssn[0])
+		fprintf(f, "\nSESSION: %s\n", curssn);
+#endif
+
+	fprintf(f, "\nCONTEXTS\n");
 	for (uchar_t i = 0; i < CTX_MAX; ++i)
 		if (g_ctx[i].c_cfg.ctxactive)
-			dprintf(fd, " %u: %s\n", i + 1, g_ctx[i].c_path);
+			fprintf(f, " %u: %s\n", i + 1, g_ctx[i].c_path);
 
-	dprintf(fd, "\nVOLUME: avail:%s ", coolsize(get_fs_info(path, VFS_AVAIL)));
-	dprintf(fd, "used:%s ", coolsize(get_fs_info(path, VFS_USED)));
-	dprintf(fd, "size:%s\n\n", coolsize(get_fs_info(path, VFS_SIZE)));
+	fprintf(f, "\nVOLUME: avail:%s ", coolsize(get_fs_info(path, VFS_AVAIL)));
+	fprintf(f, "used:%s ", coolsize(get_fs_info(path, VFS_USED)));
+	fprintf(f, "size:%s\n\n", coolsize(get_fs_info(path, VFS_SIZE)));
 
 	if (bookmark) {
-		dprintf(fd, "BOOKMARKS\n");
-		printkv(bookmark, fd, maxbm, NNN_BMS);
-		dprintf(fd, "\n");
+		fprintf(f, "BOOKMARKS\n");
+		printkv(bookmark, f, maxbm, NNN_BMS);
+		fprintf(f, "\n");
 	}
 
 	if (plug) {
-		dprintf(fd, "PLUGIN KEYS\n");
-		printkv(plug, fd, maxplug, NNN_PLUG);
-		dprintf(fd, "\n");
+		fprintf(f, "PLUGIN KEYS\n");
+		printkv(plug, f, maxplug, NNN_PLUG);
+		fprintf(f, "\n");
 	}
 
 	for (uchar_t i = NNN_OPENER; i <= NNN_TRASH; ++i) {
 		char *s = getenv(env_cfg[i]);
 		if (s)
-			dprintf(fd, "%s: %s\n", env_cfg[i], s);
+			fprintf(f, "%s: %s\n", env_cfg[i], s);
 	}
 
 	if (selpath)
-		dprintf(fd, "SELECTION FILE: %s\n", selpath);
+		fprintf(f, "SELECTION FILE: %s\n", selpath);
 
-	dprintf(fd, "\nv%s\n%s\n", VERSION, GENERAL_INFO);
-	close(fd);
+	fprintf(f, "\nv%s\n%s\n", VERSION, GENERAL_INFO);
+	fclose(f); // also closes fd
 
 	spawn(pager, g_tmpfpath, NULL, NULL, F_CLI | F_TTY);
 	unlink(g_tmpfpath);
 }
 
-static void setexports(void)
+static void setexports(const char *path)
 {
 	char dvar[] = "d0";
 	char fvar[] = "f0";
@@ -5261,6 +5359,7 @@ static void setexports(void)
 	}
 	setenv("NNN_INCLUDE_HIDDEN", xitoa(cfg.showhidden), 1);
 	setenv("NNN_PREFER_SELECTION", xitoa(cfg.prefersel), 1);
+	setenv("PWD", path, 1);
 }
 
 static void run_cmd_as_plugin(const char *file, uchar_t flags)
@@ -5391,7 +5490,7 @@ static bool run_plugin(char **path, const char *file, char *runfile, char **last
 		g_state.pluginit = 1;
 	}
 
-	setexports();
+	setexports(*path);
 
 	/* Check for run-cmd-as-plugin mode */
 	if (*file == '!') {
@@ -5504,7 +5603,9 @@ static bool prompt_run(void)
 	const char *xargs_J = "xargs -0 %s < %s";
 	char cmd[CMD_LEN_MAX + 32]; // 32 for xargs format strings
 
+
 	while (1) {
+		selcmdpos = INVALID_POS;
 #ifndef NORL
 		if (g_state.picker || g_state.xprompt) {
 #endif
@@ -5517,8 +5618,7 @@ static bool prompt_run(void)
 		if (!cmdline || !cmdline[0])
 			break;
 
-		free(lastcmd);
-		lastcmd = xstrdup(cmdline);
+		addcmdtohist(cmdline);
 		ret = TRUE;
 
 		len = xstrlen(cmdline);
@@ -5565,14 +5665,14 @@ static bool prompt_run(void)
 	return ret;
 }
 
-static bool handle_cmd(enum action sel, char *newpath)
+static bool handle_cmd(enum action sel, char *path, char *newpath)
 {
 	endselection(FALSE);
 
 	if (sel == SEL_LAUNCH)
 		return launch_app(newpath);
 
-	setexports();
+	setexports(path);
 
 	if (sel == SEL_PROMPT)
 		return prompt_run();
@@ -6044,7 +6144,7 @@ static void send_to_explorer(int *presel)
 {
 	if (nselected) {
 		int fd = open(fifopath, O_WRONLY|O_NONBLOCK|O_CLOEXEC, 0600);
-		if ((fd == -1) || (seltofile(fd, NULL) != (size_t)(selbufpos)))
+		if ((fd == -1) || (seltofile(fd, NULL, NEWLINE) != (size_t)(selbufpos)))
 			printwarn(presel);
 		else {
 			resetselind();
@@ -6465,8 +6565,10 @@ static void statusbar(char *path)
 	} else { /* light or detail mode */
 		char sort[] = "\0\0\0\0\0";
 
-		if (getorderstr(sort))
-			addstr(sort);
+		if (cfg.filtermode)
+			addch('F');
+
+		getorderstr(sort) ? addstr(sort) : addch(' ');
 
 		/* Timestamp */
 		print_time(&pent->sec, pent->flags);
@@ -6558,7 +6660,7 @@ static void draw_line(int ncols)
 
 	move(2 + last - curscroll, 0);
 	macos_icons_hack();
-	printent(&pdents[last], ncols, FALSE);
+	printent(last, ncols, FALSE);
 
 	if (g_state.oldcolor && (pdents[cur].flags & DIR_OR_DIRLNK)) {
 		if (!dir)  {/* First file is not a directory */
@@ -6572,7 +6674,7 @@ static void draw_line(int ncols)
 
 	move(2 + cur - curscroll, 0);
 	macos_icons_hack();
-	printent(&pdents[cur], ncols, TRUE);
+	printent(cur, ncols, TRUE);
 
 	/* Must reset e.g. no files in dir */
 	if (dir)
@@ -6697,7 +6799,7 @@ static void redraw(char *path)
 		if (len)
 			findmarkentry(len, &pdents[i]);
 
-		printent(&pdents[i], ncols, i == cur);
+		printent(i, ncols, i == cur);
 	}
 
 	/* Must reset e.g. no files in dir */
@@ -6749,7 +6851,7 @@ static void showselsize(const char *path)
 	printmsg(coolsize(cfg.blkorder ? sz << blk_shift : sz));
 }
 
-static bool browse(char *ipath, const char *session, int pkey)
+static bool browse(char *ipath, int pkey)
 {
 	alignas(max_align_t) char newpath[PATH_MAX];
 	alignas(max_align_t) char runfile[NAME_MAX + 1];
@@ -6775,9 +6877,7 @@ static bool browse(char *ipath, const char *session, int pkey)
 
 #ifndef NOSSN
 	/* set-up first context */
-	if (!session || !load_session(session, &path, &lastdir, &lastname, FALSE)) {
-#else
-		(void)session;
+	if (!curssn[0] || !load_session(curssn, &path, &lastdir, &lastname, FALSE)) {
 #endif
 		g_ctx[0].c_last[0] = '\0';
 		lastdir = g_ctx[0].c_last; /* last visited directory */
@@ -6794,7 +6894,7 @@ static bool browse(char *ipath, const char *session, int pkey)
 		/* If the initial path is a file, retain a way to return to start dir */
 		if (g_state.initfile) {
 			free(initpath);
-			initpath = ipath = getcwd(NULL, 0);
+			initpath = ipath = getcwd(NULL, 0); // NOLINT
 		}
 		path = g_ctx[0].c_path; /* current directory */
 
@@ -6807,9 +6907,12 @@ static bool browse(char *ipath, const char *session, int pkey)
 	newpath[0] = runfile[0] = '\0';
 
 	presel = pkey ? ((pkey == CREATE_NEW_KEY) ? 'n' : ';') : ((cfg.filtermode
-			|| (session && (g_ctx[cfg.curctx].c_fltr[0] == FILTER
+#ifndef NOSSN
+			|| (curssn[0] && (g_ctx[cfg.curctx].c_fltr[0] == FILTER
 				|| g_ctx[cfg.curctx].c_fltr[0] == RFILTER)
-				&& g_ctx[cfg.curctx].c_fltr[1])) ? FILTER : 0);
+				&& g_ctx[cfg.curctx].c_fltr[1])
+#endif
+			) ? FILTER : 0);
 
 	pdents = xrealloc(pdents, total_dents * sizeof(struct entry));
 	if (!pdents)
@@ -7250,11 +7353,18 @@ nochange:
 		case SEL_HOME: // fallthrough
 		case SEL_END: // fallthrough
 		case SEL_FIRST: // fallthrough
-		case SEL_JUMP: // fallthrough
 		case SEL_YOUNG:
 			if (ndents) {
 				g_state.move = 1;
 				handle_screen_move(sel);
+			}
+			break;
+		case SEL_JUMP:
+			if (ndents) {
+				g_state.showlines = 1;
+				redraw(path);
+				handle_screen_move(sel);
+				g_state.showlines = 0;
 			}
 			break;
 		case SEL_CDHOME: // fallthrough
@@ -7629,9 +7739,10 @@ nochange:
 		case SEL_CP: // fallthrough
 		case SEL_MV: // fallthrough
 		case SEL_CPMVAS: // fallthrough
-		case SEL_RM:
+		case SEL_TRASH: // fallthrough
+		case SEL_RM_ONLY:
 		{
-			if (sel == SEL_RM) {
+			if (sel == SEL_TRASH || sel == SEL_RM_ONLY) {
 				r = get_cur_or_sel();
 				if (!r) {
 					statusbar(path);
@@ -7642,7 +7753,7 @@ nochange:
 					tmp = (listpath && xstrcmp(path, listpath) == 0)
 					      ? listroot : path;
 					mkpath(tmp, pdents[cur].name, newpath);
-					if (!xrm(newpath))
+					if (!xrm(newpath, g_state.trash && sel == SEL_TRASH))
 						continue;
 
 					xrmfromsel(tmp, newpath);
@@ -7838,7 +7949,7 @@ nochange:
 			if (sel == SEL_RENAME) {
 				/* Rename the file */
 				if (ret == 'd')
-					spawn("cp -rp", pdents[cur].name, tmp, NULL, F_SILENT);
+					spawn("cp -rp --", pdents[cur].name, tmp, NULL, F_SILENT);
 				else if (rename(pdents[cur].name, tmp) != 0) {
 					printwarn(&presel);
 					goto nochange;
@@ -7967,7 +8078,7 @@ nochange:
 		case SEL_SHELL: // fallthrough
 		case SEL_LAUNCH: // fallthrough
 		case SEL_PROMPT:
-			r = handle_cmd(sel, newpath);
+			r = handle_cmd(sel, path, newpath);
 
 			/* Continue in type-to-nav mode, if enabled */
 			if (cfg.filtermode)
@@ -7999,7 +8110,8 @@ nochange:
 			r = get_input(messages[MSG_SSN_OPTS]);
 
 			if (r == 's') {
-				tmp = xreadline(NULL, messages[MSG_SSN_NAME]);
+				tmp = xreadline(!curssn[0] || ((curssn[0] == '@') && !curssn[1]) ? NULL : curssn,
+					messages[MSG_SSN_NAME]);
 				if (tmp && *tmp)
 					save_session(tmp, &presel);
 			} else if (r == 'l' || r == 'r') {
@@ -8326,7 +8438,7 @@ static void check_key_collision(void)
 		key = bindings[i].sym;
 
 		if (bitmap[key])
-			dprintf(STDERR_FILENO, "key collision! [%s]\n", keyname(key));
+			fprintf(stderr, "key collision! [%s]\n", keyname(key));
 		else
 			bitmap[key] = TRUE;
 	}
@@ -8334,7 +8446,7 @@ static void check_key_collision(void)
 
 static void usage(void)
 {
-	dprintf(STDOUT_FILENO,
+	fprintf(stdout,
 		"%s: nnn [OPTIONS] [PATH]\n\n"
 		"The unorthodox terminal file manager.\n\n"
 		"positional args:\n"
@@ -8388,6 +8500,7 @@ static void usage(void)
 #ifndef NOX11
 		" -x      notis, selection sync, xterm title\n"
 #endif
+		" -0      null separator in picker mode\n"
 		" -h      show help\n\n"
 		"v%s\n%s\n", __func__, VERSION, GENERAL_INFO);
 }
@@ -8511,7 +8624,9 @@ static void cleanup(void)
 	free(ihashbmp);
 	free(bookmark);
 	free(plug);
-	free(lastcmd);
+	if (lastcmdpos != INVALID_POS)
+		for (uchar_t pos = 0; pos <= lastcmdpos; ++pos)
+			free(cmd_hist[pos]);
 #ifndef NOFIFO
 	if (g_state.autofifo)
 		unlink(fifopath);
@@ -8526,13 +8641,13 @@ static void cleanup(void)
 int main(int argc, char *argv[])
 {
 	char *arg = NULL;
-	char *session = NULL;
 	int fd, opt, sort = 0, pkey = '\0'; /* Plugin key */
+	bool sepnul = FALSE;
 #ifndef NOMOUSE
 	mmask_t mask;
 	char *middle_click_env = xgetenv(env_cfg[NNN_MCLICK], "\0");
 
-	middle_click_key = (middle_click_env[0] == '^' && middle_click_env[1])
+	middle_click_key = ((middle_click_env[0] == '^') && middle_click_env[1])
 			    ? CONTROL(middle_click_env[1])
 			    : (uchar_t)middle_click_env[0];
 #endif
@@ -8545,7 +8660,7 @@ int main(int argc, char *argv[])
 
 	while ((opt = (env_opts_id > 0
 		       ? env_opts[--env_opts_id]
-		       : getopt(argc, argv, "aAb:BcCdDeEfF:gHiJKl:nNop:P:QrRs:St:T:uUVxh"))) != -1) {
+		       : getopt(argc, argv, "aAb:BcCdDeEfF:gHiJKl:nNop:P:QrRs:St:T:uUVx0h"))) != -1) {
 		switch (opt) {
 #ifndef NOFIFO
 		case 'a':
@@ -8662,12 +8777,12 @@ int main(int argc, char *argv[])
 #ifndef NOSSN
 		case 's':
 			if (env_opts_id < 0)
-				session = optarg;
+				xstrsncpy(curssn, optarg, NAME_MAX);
 			break;
 		case 'S':
 			g_state.prstssn = 1;
-			if (!session) /* Support named persistent sessions */
-				session = "@";
+			if (!curssn[0]) /* Support named persistent sessions */
+				curssn[0] = '@';
 			break;
 #endif
 		case 't':
@@ -8685,10 +8800,13 @@ int main(int argc, char *argv[])
 			g_state.uidgid = 1;
 			break;
 		case 'V':
-			dprintf(STDOUT_FILENO, "%s\n", VERSION);
+			fprintf(stdout, "%s\n", VERSION);
 			return EXIT_SUCCESS;
 		case 'x':
 			cfg.x11 = 1;
+			break;
+		case '0':
+			sepnul = TRUE;
 			break;
 		case 'h':
 			usage();
@@ -8727,8 +8845,10 @@ int main(int argc, char *argv[])
 		} else
 			dup2(STDOUT_FILENO, STDIN_FILENO);
 
-		if (session)
-			session = NULL;
+#ifndef NOSSN
+		if (curssn[0])
+			curssn[0] = '\0';
+#endif
 	}
 
 	home = getenv("HOME");
@@ -8774,13 +8894,15 @@ int main(int argc, char *argv[])
 				return EXIT_FAILURE;
 			}
 
-			if (session)
-				session = NULL;
+#ifndef NOSSN
+			if (curssn[0])
+				curssn[0] = '\0';
+#endif
 		} else if (argc == optind) {
 			/* Start in the current directory */
 			char *startpath = getenv("PWD");
 
-			initpath = (startpath && *startpath) ? xstrdup(startpath) : getcwd(NULL, 0);
+			initpath = (startpath && *startpath) ? xstrdup(startpath) : getcwd(NULL, 0); // NOLINT
 			if (!initpath)
 				initpath = "/";
 		} else { /* Open a file */
@@ -8831,8 +8953,10 @@ int main(int argc, char *argv[])
 			} else if (!S_ISDIR(sb.st_mode))
 				g_state.initfile = 1;
 
-			if (session)
-				session = NULL;
+#ifndef NOSSN
+			if (curssn[0])
+				curssn[0] = '\0';
+#endif
 		}
 	}
 
@@ -8984,11 +9108,11 @@ int main(int argc, char *argv[])
 	if (sort)
 		set_sort_flags(sort);
 
-	opt = browse(initpath, session, pkey);
+	opt = browse(initpath, pkey);
 
 #ifndef NOSSN
-	if (session && g_state.prstssn)
-		save_session(session, NULL);
+	if (curssn[0] && g_state.prstssn)
+		save_session(curssn, NULL);
 #endif
 
 #ifndef NOMOUSE
@@ -9007,7 +9131,7 @@ int main(int argc, char *argv[])
 	if (g_state.picker) {
 		if (selbufpos) {
 			fd = selpath ? open(selpath, O_WRONLY | O_CREAT | O_TRUNC, 0600) : STDOUT_FILENO;
-			if ((fd == -1) || (seltofile(fd, NULL) != (size_t)(selbufpos)))
+			if ((fd == -1) || (seltofile(fd, NULL, sepnul ? "\0" : NEWLINE) != (size_t)(selbufpos)))
 				xerror();
 
 			if (fd > 1)
